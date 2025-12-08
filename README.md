@@ -59,7 +59,7 @@ docker-compose up -d
 ollama serve
 
 # 下載模型 (首次使用)
-ollama pull gpt-oss:20b
+ollama pull gpt-oss:20b  # 在遠端伺服器上執行
 ```
 
 ### 4. 資料攝取
@@ -89,7 +89,7 @@ QDRANT_PORT=6333
 QDRANT_COLLECTION=taiwan_law
 
 # Embedding 模型 (Mac M4 Pro 優化)
-EMBEDDING_MODEL=BAAI/bge-large-zh-v1.5
+EMBEDDING_MODEL=BAAI/bge-m3
 EMBEDDING_DEVICE=mps
 
 # Ollama 配置 (遠端伺服器)
@@ -108,8 +108,9 @@ GRADIO_SHARE=False
 
 ### 配置說明
 
-- **EMBEDDING_MODEL**: 使用 `BAAI/bge-large-zh-v1.5` (1024 維) 以獲得最佳效果
+- **EMBEDDING_MODEL**: 使用 `BAAI/bge-m3` (1024 維多語言模型) 以獲得最佳效果
 - **EMBEDDING_DEVICE**: Mac M4 Pro 使用 `mps` 以利用 Apple Silicon GPU 加速
+- **OLLAMA_BASE_URL**: 遠端 Ollama 伺服器地址 (10.0.0.209)
 - **OLLAMA_MODEL**: 使用 `gpt-oss:20b` 提供高品質的法律解答
 - **TOP_K**: 檢索前 10 個最相關的法條
 
@@ -168,9 +169,9 @@ for source in result['sources']:
 ## 技術棧
 
 - **LangChain**: RAG 框架
-- **Ollama**: 本地 LLM 服務 (gpt-oss:20b)
-- **Qdrant**: 向量資料庫
-- **HuggingFace**: Embedding 模型 (BAAI/bge-large-zh-v1.5)
+- **Ollama**: 遠端 LLM 服務 (gpt-oss:20b @ 10.0.0.209)
+- **Qdrant**: 向量資料庫 (本地)
+- **HuggingFace**: Embedding 模型 (BAAI/bge-m3)
 - **Gradio**: Web UI 框架
 
 ## 文檔
@@ -184,7 +185,7 @@ for source in result['sources']:
 
 ### Q: 如何更改 LLM 模型？
 
-編輯 `.env` 檔案：
+編輯 `.env` 檔案（需在遠端伺服器上下載模型）：
 ```env
 OLLAMA_MODEL=qwen2.5:14b
 ```
@@ -193,13 +194,13 @@ OLLAMA_MODEL=qwen2.5:14b
 
 1. 增加檢索數量：`TOP_K=15`
 2. 使用更大的 Embedding 模型：`BAAI/bge-large-zh-v1.5`
-3. 使用更強的 LLM：`gpt-oss:20b`
+3. 確保遠端 Ollama 伺服器正常運行
 
 ### Q: 如何加快查詢速度？
 
 1. 減少檢索數量：`TOP_K=5`
-2. 使用較小的模型：`BAAI/bge-base-zh-v1.5`
-3. 提高相似度門檻：`SCORE_THRESHOLD=0.7`
+2. 提高相似度門檻：`SCORE_THRESHOLD=0.7`
+3. 檢查網路連線到遠端 Ollama 伺服器
 
 ## 授權
 
