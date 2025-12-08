@@ -1,6 +1,8 @@
-# 🏛️ 台灣法律智能問答系統
+# 🏛️ 中華民國法律智能問答系統
 
 基於 RAG (Retrieval-Augmented Generation) 技術的台灣法律檢索與問答系統。
+
+使用專業法律人的三段論模式（大前提、小前提、結論），為不懂法律的民眾提供清晰易懂的法律解答。
 
 ## 功能特色
 
@@ -10,6 +12,7 @@
 - 🌐 **友善 Web 介面**：使用 Gradio 提供直覺的問答介面
 - 🔒 **本地運行**：所有資料和運算都在本地，保護隱私
 - ⚡ **Apple Silicon 優化**：針對 Mac M4 Pro 優化，使用 MPS 加速
+- 📖 **專業法律解釋**：三段論模式 + 白話舉例，讓民眾理解法律
 
 ## 系統架構
 
@@ -56,7 +59,7 @@ docker-compose up -d
 ollama serve
 
 # 下載模型 (首次使用)
-ollama pull llama3.2:3b
+ollama pull gpt-oss:20b
 ```
 
 ### 4. 資料攝取
@@ -85,16 +88,16 @@ QDRANT_HOST=localhost
 QDRANT_PORT=6333
 QDRANT_COLLECTION=taiwan_law
 
-# Embedding 模型
-EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5
-EMBEDDING_DEVICE=cpu
+# Embedding 模型 (Mac M4 Pro 優化)
+EMBEDDING_MODEL=BAAI/bge-large-zh-v1.5
+EMBEDDING_DEVICE=mps
 
-# Ollama 配置
-OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=llama3.2:3b
+# Ollama 配置 (遠端伺服器)
+OLLAMA_BASE_URL=http://10.0.0.209:11434
+OLLAMA_MODEL=gpt-oss:20b
 
 # RAG 參數
-TOP_K=5
+TOP_K=10
 SCORE_THRESHOLD=0.5
 
 # Gradio 配置
@@ -103,31 +106,100 @@ GRADIO_SERVER_PORT=7860
 GRADIO_SHARE=False
 ```
 
+### 配置說明
+
+- **EMBEDDING_MODEL**: 使用 `BAAI/bge-large-zh-v1.5` (1024 維) 以獲得最佳效果
+- **EMBEDDING_DEVICE**: Mac M4 Pro 使用 `mps` 以利用 Apple Silicon GPU 加速
+- **OLLAMA_MODEL**: 使用 `gpt-oss:20b` 提供高品質的法律解答
+- **TOP_K**: 檢索前 10 個最相關的法條
+
 ## 使用範例
+
+### Web 介面（推薦）
+
+```bash
+# 啟動應用
+python src/app.py
+
+# 在瀏覽器中訪問
+# http://localhost:7860
+```
 
 ### 命令列查詢
 
 ```python
-from src.rag import TaiwanLawRAG
+from src.rag import create_rag_chain, query
 
-rag = TaiwanLawRAG()
-result = rag.query("什麼是詐欺罪？")
+# 建立 RAG 系統
+rag_chain_dict = create_rag_chain()
+
+# 執行查詢
+result = query("什麼是詐欺罪？", rag_chain_dict)
+
+# 顯示結果
+print("回答:")
 print(result['answer'])
+print("\n來源法條:")
+for source in result['sources']:
+    print(f"- {source['law_name']} 第{source['article_no']}條")
 ```
 
-### Web 介面
+### 回答格式
 
-1. 啟動 `python src/app.py`
-2. 在瀏覽器中輸入問題
-3. 系統會顯示回答和相關法條來源
+系統使用三段論模式回答：
+
+```
+【重點摘要】
+- 依據：刑法第 339 條
+- 罪名：詐欺罪
+- 簡述：以詐術使人交付財物
+
+【一、法律規範】
+- 法條內容和構成要件
+
+【二、法律解釋】
+- 白話文解釋和適用情況
+
+【三、白話舉例】
+- 生活化的具體例子
+- 說明法律後果
+```
 
 ## 技術棧
 
 - **LangChain**: RAG 框架
-- **Ollama**: 本地 LLM 服務
+- **Ollama**: 本地 LLM 服務 (gpt-oss:20b)
 - **Qdrant**: 向量資料庫
-- **HuggingFace**: Embedding 模型
+- **HuggingFace**: Embedding 模型 (BAAI/bge-large-zh-v1.5)
 - **Gradio**: Web UI 框架
+
+## 文檔
+
+- [RAG 模組文檔](docs/RAG_MODULE.md) - RAG 系統詳細說明
+- [資料攝取文檔](docs/INGEST_MODULE.md) - 資料匯入流程
+- [Web UI 文檔](docs/APP_MODULE.md) - 應用程式說明
+- [Mac M4 Pro 優化指南](docs/MAC_M4_OPTIMIZATION.md) - Apple Silicon 優化
+
+## 常見問題
+
+### Q: 如何更改 LLM 模型？
+
+編輯 `.env` 檔案：
+```env
+OLLAMA_MODEL=qwen2.5:14b
+```
+
+### Q: 如何提升回答品質？
+
+1. 增加檢索數量：`TOP_K=15`
+2. 使用更大的 Embedding 模型：`BAAI/bge-large-zh-v1.5`
+3. 使用更強的 LLM：`gpt-oss:20b`
+
+### Q: 如何加快查詢速度？
+
+1. 減少檢索數量：`TOP_K=5`
+2. 使用較小的模型：`BAAI/bge-base-zh-v1.5`
+3. 提高相似度門檻：`SCORE_THRESHOLD=0.7`
 
 ## 授權
 
@@ -136,3 +208,7 @@ MIT License
 ## 貢獻
 
 歡迎提交 Issue 和 Pull Request！
+
+---
+
+**最後更新**: 2025 年 12 月
