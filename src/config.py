@@ -19,9 +19,14 @@ class Config:
     # Embedding 模型（由 OLLAMA_BASE_URL 的伺服器計算）
     EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "imac/zpoint_large_embedding_zh")
     
-    # Ollama 配置（實際伺服器位址請在 .env 設定，勿寫死於程式碼）
+    # Ollama 配置（embedding 用；實際伺服器位址請在 .env 設定，勿寫死於程式碼）
     OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
     OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gpt-oss:20b")
+
+    # LLM 服務（OpenAI 相容端點：vLLM 或 Ollama 的 /v1 都可）
+    # 預設沿用 Ollama；要改用 vLLM 時在 .env 設定這兩項即可
+    LLM_BASE_URL = os.getenv("LLM_BASE_URL", f"{OLLAMA_BASE_URL}/v1")
+    LLM_MODEL = os.getenv("LLM_MODEL", OLLAMA_MODEL)
 
     # 遠端呼叫逾時（秒）：伺服器卡住時不要讓查詢無限等待
     OLLAMA_LLM_TIMEOUT = int(os.getenv("OLLAMA_LLM_TIMEOUT", "300"))

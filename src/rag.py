@@ -17,7 +17,7 @@ RAG (Retrieval-Augmented Generation) 模組
 import requests
 from typing import List, Dict
 
-from langchain_ollama import ChatOllama
+from langchain_openai import ChatOpenAI
 from langchain_qdrant import QdrantVectorStore
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
@@ -58,7 +58,7 @@ def check_ollama_connection() -> bool:
 
 def get_available_models() -> List[str]:
     """
-    取得 Ollama 伺服器上可用的模型名稱清單
+    取得 Ollama 伺服器上可用的模型名稱清單（embedding 用）
 
     Returns:
         List[str]: 模型名稱列表（含 tag，如 "gemma4:12b"）；查詢失敗時回傳空列表
@@ -68,6 +68,22 @@ def get_available_models() -> List[str]:
         if response.status_code != 200:
             return []
         return [m.get("name", "") for m in response.json().get("models", [])]
+    except Exception:
+        return []
+
+
+def get_llm_models() -> List[str]:
+    """
+    取得 LLM 服務（OpenAI 相容端點）上可用的模型清單
+
+    Returns:
+        List[str]: 模型 id 列表；查詢失敗時回傳空列表
+    """
+    try:
+        response = requests.get(f"{config.LLM_BASE_URL}/models", timeout=5)
+        if response.status_code != 200:
+            return []
+        return [m.get("id", "") for m in response.json().get("data", [])]
     except Exception:
         return []
 
@@ -149,32 +165,41 @@ def create_rag_chain() -> Dict:
                 f"無法連接 Ollama 服務（{config.OLLAMA_BASE_URL}）\n"
                 f"請確認 Ollama 是否正在運行"
             )
-        
+
         if not check_qdrant_connection():
             raise QdrantConnectionError(
                 f"無法連接 Qdrant 服務（{config.QDRANT_HOST}:{config.QDRANT_PORT}）\n"
                 f"請確認 Qdrant 是否正在運行"
             )
-        
+
         print("✓ 服務連接正常")
 
-        # 1.5 確認所需模型存在於伺服器
+        # 1.5 確認所需模型存在
         # （啟動時就攔截「模型未下載或損壞」，不要等到第一次查詢才發現）
+        # embedding 模型：查 Ollama 的 /api/tags（名稱一律帶 tag，未指定時為 :latest）
         available = get_available_models()
-        required = [config.OLLAMA_MODEL, config.EMBEDDING_MODEL]
-        # /api/tags 回傳的名稱一律帶 tag（未指定時為 :latest）
-        missing = [
-            m for m in required
-            if m not in available and f"{m}:latest" not in available
-        ]
-        if missing:
+        if (config.EMBEDDING_MODEL not in available
+                and f"{config.EMBEDDING_MODEL}:latest" not in available):
             raise OllamaConnectionError(
-                f"Ollama 伺服器（{config.OLLAMA_BASE_URL}）上找不到模型："
-                f"{', '.join(missing)}\n"
-                f"請先在伺服器上執行：ollama pull <模型名稱>\n"
-                f"或修改 .env 改用伺服器上已有的模型。"
+                f"Ollama 伺服器（{config.OLLAMA_BASE_URL}）上找不到 embedding 模型："
+                f"{config.EMBEDDING_MODEL}\n"
+                f"請先在伺服器上執行：ollama pull {config.EMBEDDING_MODEL}"
             )
-        print(f"✓ 模型確認存在：{', '.join(required)}")
+
+        # LLM 模型：查 OpenAI 相容端點的 /models（vLLM 或 Ollama 皆支援）
+        llm_models = get_llm_models()
+        if not llm_models:
+            raise OllamaConnectionError(
+                f"無法連接 LLM 服務（{config.LLM_BASE_URL}）\n"
+                f"請確認服務是否正在運行"
+            )
+        if (config.LLM_MODEL not in llm_models
+                and f"{config.LLM_MODEL}:latest" not in llm_models):
+            raise OllamaConnectionError(
+                f"LLM 服務（{config.LLM_BASE_URL}）上找不到模型：{config.LLM_MODEL}\n"
+                f"現有模型：{', '.join(llm_models[:5])}"
+            )
+        print(f"✓ 模型確認存在：{config.LLM_MODEL}, {config.EMBEDDING_MODEL}")
 
         # 2. 初始化 Embeddings（由遠端 Ollama 計算）
         embeddings = create_embeddings()
@@ -197,14 +222,16 @@ def create_rag_chain() -> Dict:
         )
         print("✓ 向量資料庫連接成功")
         
-        # 4. 初始化 LLM
+        # 4. 初始化 LLM（OpenAI 相容端點：vLLM 或 Ollama 的 /v1）
         # temperature 取低值：法律問答需要穩定、可重現、貼近法條原文的回答
-        print(f"初始化 LLM: {config.OLLAMA_MODEL}")
-        llm = ChatOllama(
-            base_url=config.OLLAMA_BASE_URL,
-            model=config.OLLAMA_MODEL,
+        print(f"初始化 LLM: {config.LLM_MODEL} @ {config.LLM_BASE_URL}")
+        llm = ChatOpenAI(
+            base_url=config.LLM_BASE_URL,
+            api_key="not-needed",  # vLLM / Ollama 不驗證金鑰,但欄位必填
+            model=config.LLM_MODEL,
             temperature=0.2,
-            client_kwargs={"timeout": config.OLLAMA_LLM_TIMEOUT},
+            timeout=config.OLLAMA_LLM_TIMEOUT,
+            max_retries=1,
         )
         print("✓ LLM 初始化成功")
 

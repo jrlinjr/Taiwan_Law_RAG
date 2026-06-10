@@ -3,6 +3,7 @@ langchain-core>=1.4.0
 
 # LangChain 整合
 langchain-ollama>=1.1.0
+langchain-openai>=1.0.0
 langchain-qdrant>=1.1.0
 
 # 向量資料庫
