@@ -6,7 +6,7 @@
 
 主要功能：
 - load_pdf_documents(): 從 PDF 檔案載入文件（每頁一個 chunk，保留頁碼）
-- create_embeddings(): 初始化 Embedding 模型（Ollama 遠端或 HuggingFace 本機）
+- create_embeddings(): 初始化 Embedding 模型（由遠端 Ollama 計算）
 - store_documents_in_qdrant(): 儲存文件至 Qdrant 向量資料庫（自動清除同來源舊資料）
 - ingest_documents(): 主要的資料匯入函式（支援單一檔案或整個資料夾）
 
@@ -23,6 +23,7 @@ from typing import List, Optional, Dict  # 用於類型註解
 from pypdf import PdfReader # 用於讀取 PDF 文字
 from qdrant_client import QdrantClient, models # Qdrant 連接客戶端與查詢條件
 from langchain_core.documents import Document # LangChain 的 Document 類別
+from langchain_ollama import OllamaEmbeddings # Embedding 模型（遠端 Ollama 計算）
 from langchain_qdrant import QdrantVectorStore # Qdrant 向量資料庫
 
 from config import (
@@ -128,44 +129,30 @@ def load_pdf_documents(pdf_path: str) -> List[Document]:
     return docs
 
 
-def create_embeddings():
+def create_embeddings() -> OllamaEmbeddings:
     """
-    初始化 Embedding 模型
-
-    依 config.EMBEDDING_PROVIDER 決定：
-    - "ollama"：由 OLLAMA_BASE_URL 的伺服器計算（與 sysbrain 一致，本機零負擔）
-    - "huggingface"：在本機載入模型計算（使用 EMBEDDING_DEVICE）
+    初始化 Embedding 模型（由 OLLAMA_BASE_URL 的伺服器計算）
 
     Returns:
-        Embeddings: LangChain Embeddings 實例
+        OllamaEmbeddings: LangChain Embeddings 實例
 
     Raises:
-        EmbeddingError: 當模型載入失敗時
+        EmbeddingError: 當模型初始化失敗時
     """
-    provider = config.EMBEDDING_PROVIDER.lower()
     print("\n初始化 Embedding 模型...")
-    print(f"  provider={provider}, model={config.EMBEDDING_MODEL}")
+    print(f"  model={config.EMBEDDING_MODEL} @ {config.OLLAMA_BASE_URL}")
 
     try:
-        if provider == "ollama":
-            from langchain_ollama import OllamaEmbeddings
-            embeddings = OllamaEmbeddings(
-                model=config.EMBEDDING_MODEL,
-                base_url=config.OLLAMA_BASE_URL,
-                client_kwargs={"timeout": config.OLLAMA_EMBED_TIMEOUT},
-            )
-        else:
-            from langchain_huggingface import HuggingFaceEmbeddings
-            embeddings = HuggingFaceEmbeddings(
-                model_name=config.EMBEDDING_MODEL,
-                model_kwargs={"device": config.EMBEDDING_DEVICE},
-                encode_kwargs={"normalize_embeddings": True}
-            )
+        embeddings = OllamaEmbeddings(
+            model=config.EMBEDDING_MODEL,
+            base_url=config.OLLAMA_BASE_URL,
+            client_kwargs={"timeout": config.OLLAMA_EMBED_TIMEOUT},
+        )
         print(f"  ✓ 模型載入成功")
         return embeddings
     except Exception as e:
         raise EmbeddingError(
-            f"Embedding 模型載入失敗（provider={provider}, model={config.EMBEDDING_MODEL}）：{str(e)}"
+            f"Embedding 模型載入失敗（model={config.EMBEDDING_MODEL}）：{str(e)}"
         ) from e
 
 
@@ -233,9 +220,8 @@ def store_documents_in_qdrant(
         embeddings.embed_query("連線測試")
     except Exception as e:
         raise EmbeddingError(
-            f"Embedding 計算失敗（provider={config.EMBEDDING_PROVIDER}, "
-            f"model={config.EMBEDDING_MODEL}）：{str(e)}\n"
-            f"請確認 embedding 服務正常運作且模型已下載。"
+            f"Embedding 計算失敗（model={config.EMBEDDING_MODEL}）：{str(e)}\n"
+            f"請確認 Ollama 伺服器（{config.OLLAMA_BASE_URL}）正常運作且模型已下載。"
         )
 
     try:

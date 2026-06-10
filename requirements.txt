@@ -20,6 +20,4 @@ python-dotenv>=1.0.0
 # 工具類
 requests>=2.31.0
 
-# 註:Embedding 由遠端 Ollama 伺服器計算(EMBEDDING_PROVIDER=ollama)。
-# 若要改用本機 HuggingFace 模型(EMBEDDING_PROVIDER=huggingface),需另外安裝:
-#   pip install langchain-huggingface sentence-transformers torch accelerate
+# 註:Embedding 與 LLM 皆由遠端 Ollama 伺服器計算,本機無需 GPU 相關套件。

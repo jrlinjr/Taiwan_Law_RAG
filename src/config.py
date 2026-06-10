@@ -16,12 +16,8 @@ class Config:
     QDRANT_PORT = int(os.getenv("QDRANT_PORT", "6333"))
     QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "taiwan_law")
     
-    # Embedding 模型配置
-    # provider 為 "ollama" 時由 OLLAMA_BASE_URL 的伺服器計算（與 sysbrain 一致），
-    # 為 "huggingface" 時在本機計算（EMBEDDING_DEVICE 僅此模式使用）
-    EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "ollama")
+    # Embedding 模型（由 OLLAMA_BASE_URL 的伺服器計算）
     EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "imac/zpoint_large_embedding_zh")
-    EMBEDDING_DEVICE = os.getenv("EMBEDDING_DEVICE", "mps")  # 使用 Apple Silicon GPU
     
     # Ollama 配置（實際伺服器位址請在 .env 設定，勿寫死於程式碼）
     OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
@@ -42,10 +38,6 @@ class Config:
 
 config = Config()
 
-# 向後相容：提供舊的變數名稱
-OLLAMA_BASE_URL = config.OLLAMA_BASE_URL
-EMBEDDING_MODEL = config.EMBEDDING_MODEL
-EMBEDDING_DEVICE = config.EMBEDDING_DEVICE
+# 常用組合值
 QDRANT_URL = f"http://{config.QDRANT_HOST}:{config.QDRANT_PORT}"
 QDRANT_COLLECTION_NAME = config.QDRANT_COLLECTION
-DATA_DIR = "data"

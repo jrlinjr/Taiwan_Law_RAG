@@ -97,8 +97,7 @@ QDRANT_HOST=localhost
 QDRANT_PORT=6333
 QDRANT_COLLECTION=taiwan_law
 
-# Embedding 模型 (Ollama 遠端計算,與 sysbrain 一致)
-EMBEDDING_PROVIDER=ollama
+# Embedding 模型 (由遠端 Ollama 伺服器計算)
 EMBEDDING_MODEL=imac/zpoint_large_embedding_zh
 
 # Ollama 配置 (遠端伺服器)
@@ -117,8 +116,7 @@ GRADIO_SHARE=False
 
 ### 配置說明
 
-- **EMBEDDING_PROVIDER**: `ollama` 表示 embedding 由遠端 Ollama 伺服器計算（本機零負擔）
-- **EMBEDDING_MODEL**: 使用 `imac/zpoint_large_embedding_zh`（中文專用,1024 維,與 sysbrain 一致）
+- **EMBEDDING_MODEL**: 使用 `imac/zpoint_large_embedding_zh`（中文專用,1024 維,由遠端 Ollama 計算）
 - **OLLAMA_BASE_URL**: 遠端 Ollama 伺服器地址 (10.0.0.209)
 - **OLLAMA_MODEL**: 使用 `gemma4:12b` 生成法律解答
 - **TOP_K**: 每次檢索取前 K 個最相關的頁面（越大回答越完整,但 LLM 生成越慢）

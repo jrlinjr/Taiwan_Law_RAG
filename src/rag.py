@@ -161,9 +161,7 @@ def create_rag_chain() -> Dict:
         # 1.5 確認所需模型存在於伺服器
         # （啟動時就攔截「模型未下載或損壞」，不要等到第一次查詢才發現）
         available = get_available_models()
-        required = [config.OLLAMA_MODEL]
-        if config.EMBEDDING_PROVIDER.lower() == "ollama":
-            required.append(config.EMBEDDING_MODEL)
+        required = [config.OLLAMA_MODEL, config.EMBEDDING_MODEL]
         # /api/tags 回傳的名稱一律帶 tag（未指定時為 :latest）
         missing = [
             m for m in required
@@ -178,7 +176,7 @@ def create_rag_chain() -> Dict:
             )
         print(f"✓ 模型確認存在：{', '.join(required)}")
 
-        # 2. 初始化 Embeddings（依 EMBEDDING_PROVIDER 決定 Ollama 遠端或本機）
+        # 2. 初始化 Embeddings（由遠端 Ollama 計算）
         embeddings = create_embeddings()
         
         # 3. 連接向量資料庫

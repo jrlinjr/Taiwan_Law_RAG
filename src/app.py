@@ -61,7 +61,7 @@ def get_embeddings():
     讓「先上傳、後問答」的順序也能運作。
 
     Returns:
-        Embeddings: LangChain Embeddings 實例（依 EMBEDDING_PROVIDER 而定）
+        OllamaEmbeddings: Embedding 模型實例
     """
     global _embeddings
 
