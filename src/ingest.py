@@ -68,18 +68,22 @@ def check_qdrant_connection() -> bool:
         return False
 
 
+# zpoint embedding 模型的 context 約 512 tokens（中文法律文本約 1.2 token/字），
+# 單一 chunk 超過會被 Ollama 拒絕，過長頁面需切成小段
+MAX_CHUNK_CHARS = 450
+CHUNK_OVERLAP = 50
+
+
 def load_pdf_documents(pdf_path: str) -> List[Document]:
     """
-    從 PDF 檔案載入文件，每一頁切成一個 chunk 並保留頁碼。
-
-    適合判決書、大法官解釋等沒有「第 X 條」結構的法律文件；
-    頁碼會存進 metadata，供檢索結果標示引用來源。
+    從 PDF 檔案載入文件，按頁切 chunk 並保留頁碼；
+    超過 MAX_CHUNK_CHARS 的頁面再切成多段，同頁各段共用頁碼。
 
     Args:
         pdf_path: PDF 檔案路徑
 
     Returns:
-        List[Document]: 每頁一個 Document（已略過空白頁）
+        List[Document]: 切分後的 chunks（已略過空白頁）
 
     Raises:
         PDFLoadError: 當 PDF 不存在、無法讀取或整份抽不到文字時
@@ -100,24 +104,31 @@ def load_pdf_documents(pdf_path: str) -> List[Document]:
     law_name = os.path.splitext(os.path.basename(pdf_path))[0]
 
     docs = []
+    total_pages = 0
     for page_no, page in enumerate(reader.pages, start=1):
         text = (page.extract_text() or "").strip()
         if not text:
             continue  # 略過空白頁（或無文字層的掃描頁）
-        docs.append(Document(
-            page_content=text,
-            metadata={
-                "law_name": law_name,
-                "law_level": "",
-                "law_category": "",
-                "law_url": "",
-                "modified_date": "",
-                "article_no": "",
-                "page": page_no,
-                "source": os.path.basename(pdf_path),
-                "source_type": "pdf",
-            }
-        ))
+        total_pages += 1
+
+        # 過長頁面切成多段，避免超過 embedding 模型的 context 上限
+        start = 0
+        while start < len(text):
+            docs.append(Document(
+                page_content=text[start:start + MAX_CHUNK_CHARS],
+                metadata={
+                    "law_name": law_name,
+                    "law_level": "",
+                    "law_category": "",
+                    "law_url": "",
+                    "modified_date": "",
+                    "article_no": "",
+                    "page": page_no,
+                    "source": os.path.basename(pdf_path),
+                    "source_type": "pdf",
+                }
+            ))
+            start += MAX_CHUNK_CHARS - CHUNK_OVERLAP
 
     if not docs:
         raise PDFLoadError(
@@ -125,7 +136,7 @@ def load_pdf_documents(pdf_path: str) -> List[Document]:
             f"（可能是掃描影像 PDF，需要 OCR 才能讀取，本系統暫不支援）"
         )
 
-    print(f"    ✓ {law_name}：{len(docs)} 頁")
+    print(f"    ✓ {law_name}：{total_pages} 頁 → {len(docs)} 個片段")
     return docs
 
 
