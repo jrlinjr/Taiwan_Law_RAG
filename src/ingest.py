@@ -47,6 +47,11 @@ class PDFLoadError(DataIngestionError):
     pass
 
 
+class EmbeddingError(DataIngestionError):
+    """Embedding 計算錯誤"""
+    pass
+
+
 def check_qdrant_connection() -> bool:
     """
     檢查 Qdrant 服務是否可連接
@@ -135,7 +140,7 @@ def create_embeddings():
         Embeddings: LangChain Embeddings 實例
 
     Raises:
-        Exception: 當模型載入失敗時
+        EmbeddingError: 當模型載入失敗時
     """
     provider = config.EMBEDDING_PROVIDER.lower()
     print("\n初始化 Embedding 模型...")
@@ -147,6 +152,7 @@ def create_embeddings():
             embeddings = OllamaEmbeddings(
                 model=config.EMBEDDING_MODEL,
                 base_url=config.OLLAMA_BASE_URL,
+                client_kwargs={"timeout": config.OLLAMA_EMBED_TIMEOUT},
             )
         else:
             from langchain_huggingface import HuggingFaceEmbeddings
@@ -158,9 +164,9 @@ def create_embeddings():
         print(f"  ✓ 模型載入成功")
         return embeddings
     except Exception as e:
-        raise Exception(
+        raise EmbeddingError(
             f"Embedding 模型載入失敗（provider={provider}, model={config.EMBEDDING_MODEL}）：{str(e)}"
-        )
+        ) from e
 
 
 def _remove_existing_sources(sources: List[str]) -> None:
@@ -218,6 +224,18 @@ def store_documents_in_qdrant(
             f"無法連接 Qdrant 服務（{QDRANT_URL}）\n"
             f"請確認 Qdrant 容器是否運行：docker-compose up -d\n"
             f"或檢查 QDRANT_URL 環境變數設定是否正確。"
+        )
+
+    # from_documents() 內部會先計算 embedding 再寫入 Qdrant。
+    # 先用一筆小文本驗證 embedding 服務可用，
+    # 讓「embedding 失敗」與「Qdrant 失敗」能被分開回報，不會找錯方向。
+    try:
+        embeddings.embed_query("連線測試")
+    except Exception as e:
+        raise EmbeddingError(
+            f"Embedding 計算失敗（provider={config.EMBEDDING_PROVIDER}, "
+            f"model={config.EMBEDDING_MODEL}）：{str(e)}\n"
+            f"請確認 embedding 服務正常運作且模型已下載。"
         )
 
     try:
@@ -347,6 +365,9 @@ def ingest_documents(source_path: Optional[str] = None) -> Dict:
     except QdrantConnectionError as e:
         print(f"\n❌ Qdrant 連線錯誤：\n{str(e)}")
         return {"success": False, "error": str(e), "error_type": "qdrant"}
+    except EmbeddingError as e:
+        print(f"\n❌ Embedding 錯誤：\n{str(e)}")
+        return {"success": False, "error": str(e), "error_type": "embedding"}
     except PDFLoadError as e:
         print(f"\n❌ PDF 載入錯誤：\n{str(e)}")
         return {"success": False, "error": str(e), "error_type": "pdf"}

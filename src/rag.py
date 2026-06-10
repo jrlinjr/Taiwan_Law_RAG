@@ -15,7 +15,7 @@ RAG (Retrieval-Augmented Generation) 模組
 """
 
 import requests
-from typing import List, Dict, Optional
+from typing import List, Dict
 
 from langchain_ollama import ChatOllama
 from langchain_qdrant import QdrantVectorStore
@@ -54,6 +54,22 @@ def check_ollama_connection() -> bool:
         return response.status_code == 200
     except Exception:
         return False
+
+
+def get_available_models() -> List[str]:
+    """
+    取得 Ollama 伺服器上可用的模型名稱清單
+
+    Returns:
+        List[str]: 模型名稱列表（含 tag，如 "gemma4:12b"）；查詢失敗時回傳空列表
+    """
+    try:
+        response = requests.get(f"{config.OLLAMA_BASE_URL}/api/tags", timeout=5)
+        if response.status_code != 200:
+            return []
+        return [m.get("name", "") for m in response.json().get("models", [])]
+    except Exception:
+        return []
 
 
 def check_qdrant_connection() -> bool:
@@ -141,7 +157,27 @@ def create_rag_chain() -> Dict:
             )
         
         print("✓ 服務連接正常")
-        
+
+        # 1.5 確認所需模型存在於伺服器
+        # （啟動時就攔截「模型未下載或損壞」，不要等到第一次查詢才發現）
+        available = get_available_models()
+        required = [config.OLLAMA_MODEL]
+        if config.EMBEDDING_PROVIDER.lower() == "ollama":
+            required.append(config.EMBEDDING_MODEL)
+        # /api/tags 回傳的名稱一律帶 tag（未指定時為 :latest）
+        missing = [
+            m for m in required
+            if m not in available and f"{m}:latest" not in available
+        ]
+        if missing:
+            raise OllamaConnectionError(
+                f"Ollama 伺服器（{config.OLLAMA_BASE_URL}）上找不到模型："
+                f"{', '.join(missing)}\n"
+                f"請先在伺服器上執行：ollama pull <模型名稱>\n"
+                f"或修改 .env 改用伺服器上已有的模型。"
+            )
+        print(f"✓ 模型確認存在：{', '.join(required)}")
+
         # 2. 初始化 Embeddings（依 EMBEDDING_PROVIDER 決定 Ollama 遠端或本機）
         embeddings = create_embeddings()
         
@@ -169,7 +205,8 @@ def create_rag_chain() -> Dict:
         llm = ChatOllama(
             base_url=config.OLLAMA_BASE_URL,
             model=config.OLLAMA_MODEL,
-            temperature=0.2
+            temperature=0.2,
+            client_kwargs={"timeout": config.OLLAMA_LLM_TIMEOUT},
         )
         print("✓ LLM 初始化成功")
 

@@ -61,7 +61,7 @@ def get_embeddings():
     讓「先上傳、後問答」的順序也能運作。
 
     Returns:
-        HuggingFaceEmbeddings: Embedding 模型實例
+        Embeddings: LangChain Embeddings 實例（依 EMBEDDING_PROVIDER 而定）
     """
     global _embeddings
 
