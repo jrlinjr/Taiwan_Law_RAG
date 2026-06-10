@@ -1,12 +1,10 @@
 services:
   qdrant:
     image: qdrant/qdrant:latest
-    container_name: qdrant
+    container_name: taiwan-law-qdrant
     ports:
-      - "6333:6333"
-      - "6334:6334"
+      # 對外埠號可由 .env 的 QDRANT_PORT 設定(與其他專案的 Qdrant 共存時改掉即可)
+      - "${QDRANT_PORT:-6333}:6333"
     volumes:
       - ./qdrant_storage:/qdrant/storage
-    environment:
-      - QDRANT_API_KEY=
     restart: unless-stopped
