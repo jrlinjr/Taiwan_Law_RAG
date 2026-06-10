@@ -9,15 +9,30 @@ Gradio Web UI 應用程式
 - main(): 啟動應用程式
 """
 
+import os
+import shutil
 import gradio as gr
 from typing import Tuple
 
 from rag import create_rag_chain, query, RAGError
+from ingest import (
+    load_pdf_documents,
+    create_embeddings,
+    store_documents_in_qdrant,
+    DataIngestionError,
+)
 from config import config
 
 
-# 全域 RAG Chain 快取
+# 上傳的 PDF 原始檔保存位置（專案根目錄下 data/uploads/）
+UPLOAD_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "data", "uploads"
+)
+
+# 全域快取：RAG Chain 與 Embedding 模型（避免重複載入）
 _rag_chain_dict = None
+_embeddings = None
 
 
 def initialize_rag_chain():
@@ -25,16 +40,77 @@ def initialize_rag_chain():
     初始化 RAG 系統
     
     使用全域快取避免重複初始化，提升效能。
-    
+
     Returns:
-        Dict: 包含 chain 和 retriever 的字典
+        Dict: 包含 chain 和 vector_store 的字典
     """
     global _rag_chain_dict
     
     if _rag_chain_dict is None:
         _rag_chain_dict = create_rag_chain()
-    
+
     return _rag_chain_dict
+
+
+def get_embeddings():
+    """
+    取得 Embedding 模型（全域快取）
+
+    優先重用已初始化 RAG 系統內的模型；若 RAG 尚未初始化
+    （例如知識庫還是空的、第一次就先上傳檔案），則獨立載入，
+    讓「先上傳、後問答」的順序也能運作。
+
+    Returns:
+        HuggingFaceEmbeddings: Embedding 模型實例
+    """
+    global _embeddings
+
+    if _embeddings is None:
+        if _rag_chain_dict is not None:
+            _embeddings = _rag_chain_dict["embeddings"]
+        else:
+            _embeddings = create_embeddings()
+
+    return _embeddings
+
+
+def upload_and_ingest(file_paths) -> str:
+    """
+    處理使用者上傳的 PDF，匯入向量資料庫
+
+    原始檔會複製保存到 data/uploads/，再從該位置匯入，
+    因此即使 Gradio 暫存被清除，原始 PDF 仍保留在專案內。
+
+    Args:
+        file_paths: Gradio File 元件回傳的檔案路徑列表
+
+    Returns:
+        str: 匯入結果訊息
+    """
+    if not file_paths:
+        return "請先選擇要匯入的 PDF 檔案"
+
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+    results = []
+    for path in file_paths:
+        name = os.path.basename(path)
+        try:
+            # 保存原始檔（已存在同名檔案則覆蓋，與向量庫的去重行為一致）
+            dest = os.path.join(UPLOAD_DIR, name)
+            if os.path.abspath(path) != os.path.abspath(dest):
+                shutil.copy(path, dest)
+
+            splits = load_pdf_documents(dest)
+            store_documents_in_qdrant(splits, get_embeddings(), sources=[name])
+            results.append(f"✓ {name}：成功匯入 {len(splits)} 個片段（原始檔已保存至 data/uploads/）")
+        except DataIngestionError as e:
+            results.append(f"❌ {name}：{str(e)}")
+        except Exception as e:
+            results.append(f"❌ {name}：發生錯誤 {str(e)}")
+
+    results.append("\n匯入的內容可立即在上方問答中被檢索。")
+    return "\n".join(results)
 
 
 def answer_question(question: str) -> Tuple[str, str]:
@@ -68,13 +144,23 @@ def answer_question(question: str) -> Tuple[str, str]:
             for i, source in enumerate(result['sources'], 1):
                 law_name = source.get('law_name', '未知法律')
                 article_no = source.get('article_no', '')
+                page = source.get('page')
+                score = source.get('score')
                 content = source.get('content', '')
-                
+
                 # 限制顯示長度
                 if len(content) > 300:
                     content = content[:300] + "..."
-                
-                label = f"{law_name} 第{article_no}條" if article_no else law_name
+
+                # article_no 已是完整「第 X 條」；PDF 來源則以頁碼標示
+                if article_no:
+                    label = f"{law_name} {article_no}"
+                elif page:
+                    label = f"{law_name} 第{page}頁"
+                else:
+                    label = law_name
+                if score:
+                    label += f"（相似度 {score:.2f}）"
                 sources_list.append(f"【{i}】{label}\n{content}")
             
             sources_text = "\n\n".join(sources_list)
@@ -127,6 +213,25 @@ def create_web_ui():
                     interactive=False
                 )
         
+        # PDF 匯入區
+        with gr.Accordion("📥 匯入 PDF 到知識庫", open=False):
+            gr.Markdown(
+                "上傳判決書、解釋函、法規等 PDF（按頁切分、保留頁碼）。"
+                "原始檔會保存到 data/uploads/；重複匯入同一份檔案會自動覆蓋舊資料。"
+            )
+            upload_files = gr.File(
+                label="選擇檔案",
+                file_count="multiple",
+                file_types=[".pdf"],
+                type="filepath"
+            )
+            ingest_btn = gr.Button("📥 匯入知識庫", variant="secondary")
+            ingest_output = gr.Textbox(
+                label="匯入結果",
+                lines=4,
+                interactive=False
+            )
+
         # 範例問題
         gr.Markdown(
             """
@@ -138,8 +243,14 @@ def create_web_ui():
             - 勞動基準法對於工時的規定？
             """
         )
-        
+
         # 事件綁定
+        ingest_btn.click(
+            fn=upload_and_ingest,
+            inputs=upload_files,
+            outputs=ingest_output
+        )
+
         submit_btn.click(
             fn=answer_question,
             inputs=question_input,

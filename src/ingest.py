@@ -1,51 +1,39 @@
 """
 資料匯入模組
 
-支援從 JSON 格式載入台灣法規資料
-使用 QdrantVectorStore.from_documents() 儲存至向量資料庫。
+從 PDF 檔案載入文件（判決書、解釋函、法規等），
+每頁一個 chunk 並保留頁碼，儲存至 Qdrant 向量資料庫。
 
 主要功能：
-- load_json_documents(): 從 JSON 檔案載入法律資料
-- split_documents(): 切分文件
-- create_embeddings(): 使用 HuggingFace Embedding 模型將文字轉向量
-- store_documents_in_qdrant(): 儲存文件至 Qdrant 向量資料庫
-- ingest_documents(): 主要的資料匯入函式
+- load_pdf_documents(): 從 PDF 檔案載入文件（每頁一個 chunk，保留頁碼）
+- create_embeddings(): 初始化 Embedding 模型（Ollama 遠端或 HuggingFace 本機）
+- store_documents_in_qdrant(): 儲存文件至 Qdrant 向量資料庫（自動清除同來源舊資料）
+- ingest_documents(): 主要的資料匯入函式（支援單一檔案或整個資料夾）
 
 錯誤處理：
 - DataIngestionError: 資料匯入錯誤基類
-- OllamaConnectionError: Ollama 連線錯誤
 - QdrantConnectionError: Qdrant 連線錯誤
-- JSONLoadError: JSON 載入錯誤
+- PDFLoadError: PDF 載入錯誤
 """
 
 import os # 查詢檔案路徑是否存在
 import sys # sys.exit() 用於結束程式並返回狀態碼
-import json # 用於載入 JSON 檔案
-import requests # 用於 HTTP 請求
-from typing import List, Dict, Optional  # 用於類型註解
+from typing import List, Optional, Dict  # 用於類型註解
 
-from qdrant_client import QdrantClient # Qdrant 連接客戶端
+from pypdf import PdfReader # 用於讀取 PDF 文字
+from qdrant_client import QdrantClient, models # Qdrant 連接客戶端與查詢條件
 from langchain_core.documents import Document # LangChain 的 Document 類別
 from langchain_qdrant import QdrantVectorStore # Qdrant 向量資料庫
-from langchain_huggingface import HuggingFaceEmbeddings # HuggingFace Embedding 模型
-from langchain_text_splitters import RecursiveCharacterTextSplitter # 用於切分文字的工具
 
 from config import (
-    OLLAMA_BASE_URL,
-    EMBEDDING_MODEL,
+    config,
     QDRANT_URL,
     QDRANT_COLLECTION_NAME,
-    DATA_DIR,
-) # 配置檔案中的常數
+) # 配置物件與常數
 
 
 class DataIngestionError(Exception):
     """資料匯入錯誤基類"""
-    pass
-
-
-class OllamaConnectionError(DataIngestionError):
-    """Ollama 連線錯誤"""
     pass
 
 
@@ -54,23 +42,9 @@ class QdrantConnectionError(DataIngestionError):
     pass
 
 
-class JSONLoadError(DataIngestionError):
-    """JSON 載入錯誤"""
+class PDFLoadError(DataIngestionError):
+    """PDF 載入錯誤"""
     pass
-
-
-def check_ollama_connection() -> bool:
-    """
-    檢查 Ollama 服務是否可連接
-    
-    Returns:
-        bool: 連接成功返回 True，否則返回 False
-    """
-    try:
-        response = requests.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=5)
-        return response.status_code == 200
-    except Exception:
-        return False
 
 
 def check_qdrant_connection() -> bool:
@@ -88,213 +62,168 @@ def check_qdrant_connection() -> bool:
         return False
 
 
-def load_json_documents(json_path: str) -> List[Document]:
+def load_pdf_documents(pdf_path: str) -> List[Document]:
     """
-    從 JSON 檔案載入台灣法規資料
-    
+    從 PDF 檔案載入文件，每一頁切成一個 chunk 並保留頁碼。
+
+    適合判決書、大法官解釋等沒有「第 X 條」結構的法律文件；
+    頁碼會存進 metadata，供檢索結果標示引用來源。
+
     Args:
-        json_path: JSON 檔案路徑
-        
+        pdf_path: PDF 檔案路徑
+
     Returns:
-        List[Document]: 載入的文件列表，每個 Document 代表一個法律的完整資料
-        
+        List[Document]: 每頁一個 Document（已略過空白頁）
+
     Raises:
-        JSONLoadError: 當 JSON 檔案不存在或無法讀取時
+        PDFLoadError: 當 PDF 不存在、無法讀取或整份抽不到文字時
     """
-    if not os.path.exists(json_path):
-        raise JSONLoadError(
-            f"找不到檔案：{json_path}\n"
+    if not os.path.exists(pdf_path):
+        raise PDFLoadError(
+            f"找不到檔案：{pdf_path}\n"
             f"請檢查路徑是否正確。"
         )
-    
+
     try:
-        print(f"  載入 JSON 檔案... ({json_path})")
-        with open(json_path, 'r', encoding='utf-8-sig') as f:
-            data = json.load(f)
-        
-        documents = []
-        laws = data.get("Laws", [])
-        
-        for law in laws:
-            law_name = law.get("LawName", "未知法律")
-            law_level = law.get("LawLevel", "")         # 好像不太需要
-            law_category = law.get("LawCategory", "")   # 意義不大
-            articles = law.get("LawArticles", [])
-            
-            # 將 articles 轉換成可讀的文本格式
-            page_content_lines = []
-            for article in articles:
-                article_type = article.get("ArticleType", "")
-                article_no = article.get("ArticleNo", "").strip()
-                article_content = article.get("ArticleContent", "").strip()
-                
-                if article_type == "C":
-                    # 編/章標題
-                    page_content_lines.append(f"\n{article_content}")
-                elif article_type == "A" and article_content:
-                    # 條文
-                    if article_no:
-                        page_content_lines.append(f"{article_no}\n{article_content}")
-                    else:
-                        page_content_lines.append(article_content)
-            
-            page_content = "\n".join(page_content_lines)
-            
-            # 將整個法律作為一個 Document，後續再切分
-            doc = Document(
-                page_content=page_content,
-                metadata={
-                    "law_name": law_name,
-                    "law_level": law_level,
-                    "law_category": law_category,
-                    "law_url": law.get("LawURL", ""),
-                    "modified_date": law.get("LawModifiedDate", ""),
-                    "articles": articles  # 保留原始文章資料供 split_documents 使用
-                }
-            )
-            documents.append(doc)
-            print(f"    載入法律: {law_name} ({len(articles)} 條文)")
-        
-        print(f"    ✓ 成功載入 {len(documents)} 部法律")
-        return documents
-        
-    except json.JSONDecodeError as e:
-        raise JSONLoadError(f"JSON 格式錯誤：{str(e)}")
+        print(f"  載入 PDF 檔案... ({pdf_path})")
+        reader = PdfReader(pdf_path)
     except Exception as e:
-        raise JSONLoadError(f"無法讀取 JSON 檔案：{str(e)}")
+        raise PDFLoadError(f"無法讀取 PDF 檔案：{str(e)}")
+
+    # 以檔名（去除副檔名）作為文件名稱
+    law_name = os.path.splitext(os.path.basename(pdf_path))[0]
+
+    docs = []
+    for page_no, page in enumerate(reader.pages, start=1):
+        text = (page.extract_text() or "").strip()
+        if not text:
+            continue  # 略過空白頁（或無文字層的掃描頁）
+        docs.append(Document(
+            page_content=text,
+            metadata={
+                "law_name": law_name,
+                "law_level": "",
+                "law_category": "",
+                "law_url": "",
+                "modified_date": "",
+                "article_no": "",
+                "page": page_no,
+                "source": os.path.basename(pdf_path),
+                "source_type": "pdf",
+            }
+        ))
+
+    if not docs:
+        raise PDFLoadError(
+            f"PDF 內沒有可抽取的文字：{pdf_path}\n"
+            f"（可能是掃描影像 PDF，需要 OCR 才能讀取，本系統暫不支援）"
+        )
+
+    print(f"    ✓ {law_name}：{len(docs)} 頁")
+    return docs
 
 
-def split_documents(laws: List[Dict], chunk_size: int = 1000) -> List[Document]:
+def create_embeddings():
     """
-    將每個條文轉換為 Document
-    
-    Args:
-        laws: 法律資料列表
-        chunk_size: 超過此大小的條文會進一步切分
-        
+    初始化 Embedding 模型
+
+    依 config.EMBEDDING_PROVIDER 決定：
+    - "ollama"：由 OLLAMA_BASE_URL 的伺服器計算（與 sysbrain 一致，本機零負擔）
+    - "huggingface"：在本機載入模型計算（使用 EMBEDDING_DEVICE）
+
     Returns:
-        List[Document]: 切分後的 chunks
-    """
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=chunk_size,
-        chunk_overlap=200,
-        separators=["\n\n", "\n", "。", " ", ""]
-    )
-    
-    print("\n切分文字...")
-    splits = []
-    
-    for law in laws:
-        law_name = law.get("LawName", "未知法律")
-        law_level = law.get("LawLevel", "")
-        law_category = law.get("LawCategory", "")
-        law_url = law.get("LawURL", "")
-        modified_date = law.get("LawModifiedDate", "")
-        articles = law.get("LawArticles", [])
-        
-        for article in articles:
-            article_type = article.get("ArticleType", "")
-            article_no = article.get("ArticleNo", "").strip()
-            article_content = article.get("ArticleContent", "").strip()
-            
-            # 只處理條文（ArticleType: "A"）
-            if article_type != "A" or not article_content:
-                continue
-            
-            # 建立 chunk 內容
-            if article_no:
-                chunk_text = f"{article_no}\n{article_content}"
-            else:
-                chunk_text = article_content
-            
-            # 如果超過 chunk_size，進一步切分
-            if len(chunk_text) > chunk_size:
-                sub_chunks = splitter.create_documents([chunk_text])
-                for sub_chunk in sub_chunks:
-                    sub_chunk.metadata.update({
-                        "law_name": law_name,
-                        "law_level": law_level,
-                        "law_category": law_category,
-                        "law_url": law_url,
-                        "modified_date": modified_date,
-                        "article_no": article_no,
-                    })
-                    splits.append(sub_chunk)
-            else:
-                splits.append(Document(
-                    page_content=chunk_text,
-                    metadata={
-                        "law_name": law_name,
-                        "law_level": law_level,
-                        "law_category": law_category,
-                        "law_url": law_url,
-                        "modified_date": modified_date,
-                        "article_no": article_no,
-                    }
-                ))
-    
-    print(f"  ✓ 產生 {len(splits)} 個文字片段")
-    return splits
+        Embeddings: LangChain Embeddings 實例
 
-
-def create_embeddings() -> HuggingFaceEmbeddings:
-    """
-    初始化 HuggingFace Embedding 模型
-    
-    Returns:
-        HuggingFaceEmbeddings: HuggingFace embeddings 實例
-        
     Raises:
         Exception: 當模型載入失敗時
     """
-    print("\n初始化 HuggingFace Embedding 模型...")
-    print(f"  正在載入模型：{EMBEDDING_MODEL}...")
-    
+    provider = config.EMBEDDING_PROVIDER.lower()
+    print("\n初始化 Embedding 模型...")
+    print(f"  provider={provider}, model={config.EMBEDDING_MODEL}")
+
     try:
-        embeddings = HuggingFaceEmbeddings(
-            model_name=EMBEDDING_MODEL,
-            encode_kwargs={"normalize_embeddings": True}
-        )
+        if provider == "ollama":
+            from langchain_ollama import OllamaEmbeddings
+            embeddings = OllamaEmbeddings(
+                model=config.EMBEDDING_MODEL,
+                base_url=config.OLLAMA_BASE_URL,
+            )
+        else:
+            from langchain_huggingface import HuggingFaceEmbeddings
+            embeddings = HuggingFaceEmbeddings(
+                model_name=config.EMBEDDING_MODEL,
+                model_kwargs={"device": config.EMBEDDING_DEVICE},
+                encode_kwargs={"normalize_embeddings": True}
+            )
         print(f"  ✓ 模型載入成功")
         return embeddings
     except Exception as e:
-        error_msg = str(e)
-        if "404" in error_msg or "not found" in error_msg.lower():
-            raise Exception(
-                f"模型 {EMBEDDING_MODEL} 未找到或無法下載\n"
-                f"錯誤：{error_msg}\n"
-                f"請確保網路連接正常，或使用其他可用的 HuggingFace 模型"
-            )
-        raise Exception(f"模型載入失敗：{error_msg}")
+        raise Exception(
+            f"Embedding 模型載入失敗（provider={provider}, model={config.EMBEDDING_MODEL}）：{str(e)}"
+        )
+
+
+def _remove_existing_sources(sources: List[str]) -> None:
+    """
+    刪除向量資料庫中來自相同來源檔案的舊資料。
+
+    重複執行 ingest 時，避免同一份檔案的內容被重複累積，
+    導致檢索結果被重複片段佔據。
+
+    Args:
+        sources: 來源檔案名稱清單（metadata.source 的值）
+    """
+    client = QdrantClient(url=QDRANT_URL)
+    existing = [c.name for c in client.get_collections().collections]
+    if QDRANT_COLLECTION_NAME not in existing:
+        return  # collection 尚未建立，無舊資料可清
+
+    client.delete(
+        collection_name=QDRANT_COLLECTION_NAME,
+        points_selector=models.FilterSelector(
+            filter=models.Filter(must=[
+                models.FieldCondition(
+                    key="metadata.source",
+                    match=models.MatchAny(any=sources),
+                )
+            ])
+        ),
+    )
+    print(f"  ✓ 已清除 {len(sources)} 個來源檔案的舊資料（避免重複匯入）")
 
 
 def store_documents_in_qdrant(
     splits: List,
-    embeddings: HuggingFaceEmbeddings
+    embeddings,
+    sources: Optional[List[str]] = None
 ) -> QdrantVectorStore:
     """
     使用 QdrantVectorStore.from_documents() 儲存文件至向量資料庫
-    
+
     Args:
         splits: 切分後的文件片段列表
-        embeddings: HuggingFaceEmbeddings 實例
-        
+        embeddings: LangChain Embeddings 實例
+        sources: 來源檔案名稱清單；提供時會先清除同來源的舊資料再寫入
+
     Returns:
         QdrantVectorStore: Qdrant vector store 實例
-        
+
     Raises:
         QdrantConnectionError: 當無法連接 Qdrant 時
     """
     print("\n儲存至向量資料庫...")
-    
+
     if not check_qdrant_connection():
         raise QdrantConnectionError(
             f"無法連接 Qdrant 服務（{QDRANT_URL}）\n"
             f"請確認 Qdrant 容器是否運行：docker-compose up -d\n"
             f"或檢查 QDRANT_URL 環境變數設定是否正確。"
         )
-    
+
     try:
+        if sources:
+            _remove_existing_sources(sources)
+
         vectorstore = QdrantVectorStore.from_documents(
             documents=splits,
             embedding=embeddings,
@@ -313,95 +242,127 @@ def store_documents_in_qdrant(
         raise QdrantConnectionError(f"儲存至 Qdrant 失敗：{str(e)}")
 
 
-def ingest_documents(
-    json_path: Optional[str] = None
-) -> Dict:
+def _collect_source_files(source_path: str) -> List[str]:
     """
-    主要的資料匯入函式（JSON 版本）
-    
+    將來源路徑展開為待匯入的 PDF 檔案清單。
+
+    - 若為資料夾：遞迴掃描其中所有 .pdf 檔案（依路徑排序）
+    - 若為單一檔案：回傳僅含該檔的清單
+
     Args:
-        json_path: JSON 檔案路徑（若為 None，使用預設路徑）
-        
+        source_path: 檔案或資料夾路徑
+
+    Returns:
+        List[str]: 待匯入的檔案路徑清單
+    """
+    if os.path.isdir(source_path):
+        files = []
+        for root, _, names in os.walk(source_path):
+            for name in names:
+                if name.lower().endswith(".pdf"):
+                    files.append(os.path.join(root, name))
+        return sorted(files)
+    return [source_path]
+
+
+def ingest_documents(source_path: Optional[str] = None) -> Dict:
+    """
+    主要的資料匯入函式（PDF）。
+
+    Args:
+        source_path: 來源路徑，可為：
+            - 單一 .pdf 檔案
+            - 包含多個 .pdf 的資料夾（遞迴掃描）
+            - None：使用預設的 data/uploads/ 資料夾
+
     Returns:
         Dict: 包含匯入統計資訊的字典
-        
+
     Raises:
         DataIngestionError: 當匯入過程中發生錯誤時
     """
     # 使用預設路徑
-    if json_path is None:
+    if source_path is None:
         # 從專案根目錄開始
         project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        json_path = os.path.join(project_root, "data", "chlaw.json", "ChLaw.json")
-    
+        source_path = os.path.join(project_root, "data", "uploads")
+
     print("=" * 60)
-    print("台灣法律 RAG 系統 - 資料匯入 (JSON)")
+    print("台灣法律 RAG 系統 - 資料匯入 (PDF)")
     print("=" * 60)
-    
+
     try:
-        # 1. 載入 JSON 檔案
-        print("\n[1/4] 載入 JSON 檔案...")
-        documents = load_json_documents(json_path)
-        total_laws = len(documents)
-        
-        # 提取法律資料
-        laws = []
-        for doc in documents:
-            law_data = {
-                "LawName": doc.metadata.get("law_name"),
-                "LawLevel": doc.metadata.get("law_level"),
-                "LawCategory": doc.metadata.get("law_category"),
-                "LawURL": doc.metadata.get("law_url"),
-                "LawModifiedDate": doc.metadata.get("modified_date"),
-                "LawArticles": doc.metadata.get("articles", [])
-            }
-            laws.append(law_data)
-        
-        # 2. 切分文字
-        print("\n[2/4] 切分文字...")
-        splits = split_documents(laws)
-        total_chunks = len(splits)
-        
+        # 1. 展開來源檔案清單（支援單檔或整個資料夾）
+        files = _collect_source_files(source_path)
+        if not files:
+            raise DataIngestionError(
+                f"在 {source_path} 找不到可匯入的 .pdf 檔案"
+            )
+
+        print(f"\n[1/4] 載入來源檔案...（共 {len(files)} 個）")
+        all_splits: List[Document] = []
+
+        for file_path in files:
+            print(f"\n  → {file_path}")
+            if not file_path.lower().endswith(".pdf"):
+                raise DataIngestionError(
+                    f"不支援的檔案格式：{file_path}\n目前僅支援 .pdf"
+                )
+            all_splits.extend(load_pdf_documents(file_path))
+
+        total_chunks = len(all_splits)
+        if total_chunks == 0:
+            raise DataIngestionError("沒有產生任何可儲存的文字片段，請檢查來源檔案內容")
+
+        # 2. 切分結果統計
+        print(f"\n[2/4] 切分完成，共 {total_chunks} 個文字片段")
+
         # 3. 初始化 Embedding
         print("\n[3/4] 初始化 Embedding 模型...")
         embeddings = create_embeddings()
-        
-        # 4. 儲存至 Qdrant
+
+        # 4. 儲存至 Qdrant（先清除同來源舊資料，避免重複匯入）
         print("\n[4/4] 儲存至向量資料庫...")
-        vectorstore = store_documents_in_qdrant(splits, embeddings)
-        
+        source_names = [os.path.basename(f) for f in files]
+        store_documents_in_qdrant(all_splits, embeddings, sources=source_names)
+
         # 顯示統計資訊
         print("\n" + "=" * 60)
         print("匯入完成！")
         print("=" * 60)
-        print(f"總法律數：{total_laws}")
+        print(f"來源檔案數：{len(files)}")
         print(f"文字片段數：{total_chunks}")
         print(f"向量資料庫：{QDRANT_COLLECTION_NAME}")
-        print(f"Embedding 模型：{EMBEDDING_MODEL}")
+        print(f"Embedding 模型：{config.EMBEDDING_MODEL}")
         print("=" * 60)
-        
+
         return {
             "success": True,
-            "total_laws": total_laws,
+            "total_files": len(files),
             "total_chunks": total_chunks,
             "collection_name": QDRANT_COLLECTION_NAME,
-            "embedding_model": EMBEDDING_MODEL,
+            "embedding_model": config.EMBEDDING_MODEL,
         }
-        
-    except OllamaConnectionError as e:
-        print(f"\n❌ Ollama 連線錯誤：\n{str(e)}")
-        return {"success": False, "error": str(e), "error_type": "ollama"}
+
     except QdrantConnectionError as e:
         print(f"\n❌ Qdrant 連線錯誤：\n{str(e)}")
         return {"success": False, "error": str(e), "error_type": "qdrant"}
-    except JSONLoadError as e:
-        print(f"\n❌ JSON 載入錯誤：\n{str(e)}")
-        return {"success": False, "error": str(e), "error_type": "json"}
+    except PDFLoadError as e:
+        print(f"\n❌ PDF 載入錯誤：\n{str(e)}")
+        return {"success": False, "error": str(e), "error_type": "pdf"}
+    except DataIngestionError as e:
+        print(f"\n❌ 資料匯入錯誤：\n{str(e)}")
+        return {"success": False, "error": str(e), "error_type": "ingestion"}
     except Exception as e:
         print(f"\n❌ 未預期的錯誤：{str(e)}")
         return {"success": False, "error": str(e), "error_type": "unknown"}
 
 
 if __name__ == "__main__":
-    result = ingest_documents()
+    # 支援從命令列指定來源（檔案或資料夾）：
+    #   python src/ingest.py                      # 預設掃描 data/uploads/
+    #   python src/ingest.py data/某判決書.pdf     # 單一 PDF
+    #   python src/ingest.py data/pdf/            # 整個資料夾（遞迴掃描 PDF）
+    source = sys.argv[1] if len(sys.argv) > 1 else None
+    result = ingest_documents(source)
     sys.exit(0 if result["success"] else 1)

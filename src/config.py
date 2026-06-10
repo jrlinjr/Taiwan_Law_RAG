@@ -16,12 +16,15 @@ class Config:
     QDRANT_PORT = int(os.getenv("QDRANT_PORT", "6333"))
     QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "taiwan_law")
     
-    # Embedding 模型配置 (Mac M4 Pro 優化)
-    EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "BAAI/bge-large-zh-v1.5")
+    # Embedding 模型配置
+    # provider 為 "ollama" 時由 OLLAMA_BASE_URL 的伺服器計算（與 sysbrain 一致），
+    # 為 "huggingface" 時在本機計算（EMBEDDING_DEVICE 僅此模式使用）
+    EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "ollama")
+    EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "imac/zpoint_large_embedding_zh")
     EMBEDDING_DEVICE = os.getenv("EMBEDDING_DEVICE", "mps")  # 使用 Apple Silicon GPU
     
-    # Ollama 配置
-    OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://10.0.0.209:11434")
+    # Ollama 配置（實際伺服器位址請在 .env 設定，勿寫死於程式碼）
+    OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
     OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gpt-oss:20b")
     
     # RAG 配置

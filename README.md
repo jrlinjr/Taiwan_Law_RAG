@@ -53,21 +53,30 @@ pip install -r requirements.txt
 
 ```bash
 # 啟動 Qdrant (使用 Docker)
-docker-compose up -d
+docker compose up -d
 
-# 確認 Ollama 正在運行
-ollama serve
-
+# 確認遠端 Ollama 伺服器正在運行（LLM 不在本機跑）
 # 下載模型 (首次使用)
 ollama pull gpt-oss:20b  # 在遠端伺服器上執行
 ```
 
 ### 4. 資料攝取
 
+支援 PDF 文件（判決書、解釋函、法規等，按頁切分並保留頁碼）。
+也可以直接在 Web UI 的「📥 匯入 PDF 到知識庫」上傳，原始檔會保存到 `data/uploads/`。
+
 ```bash
-# 將法律資料匯入向量資料庫
-python src/ingest.py data/chlaw.json/ChLaw.json
+# 匯入 data/uploads/ 內所有 PDF（預設）
+python src/ingest.py
+
+# 匯入單一 PDF
+python src/ingest.py data/某判決書.pdf
+
+# 匯入整個資料夾（遞迴掃描所有 .pdf）
+python src/ingest.py data/pdf/
 ```
+
+重複匯入同一份檔案會自動清除舊資料後再寫入，不會產生重複內容。
 
 ### 5. 啟動應用
 
@@ -88,13 +97,13 @@ QDRANT_HOST=localhost
 QDRANT_PORT=6333
 QDRANT_COLLECTION=taiwan_law
 
-# Embedding 模型 (Mac M4 Pro 優化)
-EMBEDDING_MODEL=BAAI/bge-m3
-EMBEDDING_DEVICE=mps
+# Embedding 模型 (Ollama 遠端計算,與 sysbrain 一致)
+EMBEDDING_PROVIDER=ollama
+EMBEDDING_MODEL=imac/zpoint_large_embedding_zh
 
 # Ollama 配置 (遠端伺服器)
 OLLAMA_BASE_URL=http://10.0.0.209:11434
-OLLAMA_MODEL=gpt-oss:20b
+OLLAMA_MODEL=gemma4:12b
 
 # RAG 參數
 TOP_K=10
@@ -108,11 +117,11 @@ GRADIO_SHARE=False
 
 ### 配置說明
 
-- **EMBEDDING_MODEL**: 使用 `BAAI/bge-m3` (1024 維多語言模型) 以獲得最佳效果
-- **EMBEDDING_DEVICE**: Mac M4 Pro 使用 `mps` 以利用 Apple Silicon GPU 加速
+- **EMBEDDING_PROVIDER**: `ollama` 表示 embedding 由遠端 Ollama 伺服器計算（本機零負擔）
+- **EMBEDDING_MODEL**: 使用 `imac/zpoint_large_embedding_zh`（中文專用,1024 維,與 sysbrain 一致）
 - **OLLAMA_BASE_URL**: 遠端 Ollama 伺服器地址 (10.0.0.209)
-- **OLLAMA_MODEL**: 使用 `gpt-oss:20b` 提供高品質的法律解答
-- **TOP_K**: 檢索前 10 個最相關的法條
+- **OLLAMA_MODEL**: 使用 `gemma4:12b` 生成法律解答
+- **TOP_K**: 每次檢索取前 K 個最相關的頁面（越大回答越完整,但 LLM 生成越慢）
 
 ## 使用範例
 
@@ -150,20 +159,17 @@ for source in result['sources']:
 系統使用三段論模式回答：
 
 ```
-【重點摘要】
-- 依據：刑法第 339 條
-- 罪名：詐欺罪
-- 簡述：以詐術使人交付財物
+依據刑法第 339 條之規定，行為人之詐欺行為成立詐欺罪。
 
-【一、法律規範】
-- 法條內容和構成要件
+**法律規範**
+- 法條內容和主要構成要件
 
-【二、法律解釋】
+**法律解釋**
 - 白話文解釋和適用情況
 
-【三、白話舉例】
+**白話舉例**
 - 生活化的具體例子
-- 說明法律後果
+- 說明法律後果（罰款、監禁、民事賠償等）
 ```
 
 ## 技術棧
@@ -173,13 +179,6 @@ for source in result['sources']:
 - **Qdrant**: 向量資料庫 (本地)
 - **HuggingFace**: Embedding 模型 (BAAI/bge-m3)
 - **Gradio**: Web UI 框架
-
-## 文檔
-
-- [RAG 模組文檔](docs/RAG_MODULE.md) - RAG 系統詳細說明
-- [資料攝取文檔](docs/INGEST_MODULE.md) - 資料匯入流程
-- [Web UI 文檔](docs/APP_MODULE.md) - 應用程式說明
-- [Mac M4 Pro 優化指南](docs/MAC_M4_OPTIMIZATION.md) - Apple Silicon 優化
 
 ## 常見問題
 

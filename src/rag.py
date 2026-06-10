@@ -17,15 +17,14 @@ RAG (Retrieval-Augmented Generation) 模組
 import requests
 from typing import List, Dict, Optional
 
-from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_ollama import ChatOllama
 from langchain_qdrant import QdrantVectorStore
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnablePassthrough
 from qdrant_client import QdrantClient
 
 from config import config
+from ingest import create_embeddings
 
 
 class RAGError(Exception):
@@ -75,25 +74,50 @@ def check_qdrant_connection() -> bool:
         return False
 
 
+def format_docs(docs: List) -> str:
+    """
+    將檢索到的文件格式化為 prompt 的 context 字串
+
+    Args:
+        docs: LangChain Document 物件列表
+
+    Returns:
+        str: 格式化後的文件字串
+    """
+    formatted = []
+    for doc in docs:
+        metadata = doc.metadata
+        law_name = metadata.get('law_name', '未知法律')
+        article_no = metadata.get('article_no', '')
+        page = metadata.get('page')
+        # article_no 在攝取時已是完整「第 X 條」；PDF 來源則改用頁碼標示
+        if article_no:
+            label = f"{law_name} {article_no}"
+        elif page:
+            label = f"{law_name} 第{page}頁"
+        else:
+            label = law_name
+        formatted.append(f"【{label}】\n{doc.page_content}")
+    return "\n\n".join(formatted)
+
+
 def create_rag_chain() -> Dict:
     """
     建立 RAG 查詢鏈
-    
+
     這是系統的核心函式，負責：
     1. 檢查服務連接
     2. 初始化 Embedding 模型
     3. 連接向量資料庫
-    4. 建立 Retriever
-    5. 初始化 LLM
-    6. 組合 RAG Chain
-    
+    4. 初始化 LLM
+    5. 組合 RAG Chain
+
     Returns:
         Dict: 包含以下鍵值：
-            - chain: LangChain RAG Chain
-            - retriever: 向量檢索器
-            - vector_store: Qdrant 向量資料庫
+            - chain: LangChain Chain（輸入 {"context", "question"}）
+            - vector_store: Qdrant 向量資料庫（檢索用）
             - embeddings: Embedding 模型
-            
+
     Raises:
         OllamaConnectionError: 無法連接 Ollama
         QdrantConnectionError: 無法連接 Qdrant
@@ -118,17 +142,20 @@ def create_rag_chain() -> Dict:
         
         print("✓ 服務連接正常")
         
-        # 2. 初始化 Embeddings
-        print(f"載入 Embedding 模型: {config.EMBEDDING_MODEL}")
-        embeddings = HuggingFaceEmbeddings(
-            model_name=config.EMBEDDING_MODEL,
-            model_kwargs={'device': config.EMBEDDING_DEVICE},
-            encode_kwargs={'normalize_embeddings': True}
-        )
-        print("✓ Embedding 模型載入成功")
+        # 2. 初始化 Embeddings（依 EMBEDDING_PROVIDER 決定 Ollama 遠端或本機）
+        embeddings = create_embeddings()
         
         # 3. 連接向量資料庫
         print(f"連接 Qdrant Collection: {config.QDRANT_COLLECTION}")
+        client = QdrantClient(host=config.QDRANT_HOST, port=config.QDRANT_PORT)
+        if not client.collection_exists(config.QDRANT_COLLECTION):
+            raise RAGError(
+                f"向量資料庫中沒有 Collection「{config.QDRANT_COLLECTION}」，"
+                f"表示尚未匯入任何資料。\n"
+                f"請先匯入資料（擇一）：\n"
+                f"  1. 在 Web 介面展開「📥 匯入 PDF 到知識庫」上傳 PDF\n"
+                f"  2. 命令列匯入：python src/ingest.py [PDF 或資料夾]"
+            )
         vector_store = QdrantVectorStore.from_existing_collection(
             embedding=embeddings,
             collection_name=config.QDRANT_COLLECTION,
@@ -136,24 +163,17 @@ def create_rag_chain() -> Dict:
         )
         print("✓ 向量資料庫連接成功")
         
-        # 4. 建立 Retriever
-        retriever = vector_store.as_retriever(
-            search_kwargs={
-                "k": config.TOP_K,
-                "score_threshold": config.SCORE_THRESHOLD
-            }
-        )
-        
-        # 5. 初始化 LLM
+        # 4. 初始化 LLM
+        # temperature 取低值：法律問答需要穩定、可重現、貼近法條原文的回答
         print(f"初始化 LLM: {config.OLLAMA_MODEL}")
         llm = ChatOllama(
             base_url=config.OLLAMA_BASE_URL,
             model=config.OLLAMA_MODEL,
-            temperature=0.7
+            temperature=0.2
         )
         print("✓ LLM 初始化成功")
-        
-        # 6. 建立 Prompt Template
+
+        # 5. 建立 Prompt Template
         template = """你是一位精通中華民國台灣法律的法律顧問，用簡潔專業的方式為不懂法律的人解釋法律。
 
 【相關法律條文】
@@ -193,46 +213,23 @@ def create_rag_chain() -> Dict:
 請開始回答："""
         
         prompt = ChatPromptTemplate.from_template(template)
-        
-        # 7. 格式化文件函數
-        def format_docs(docs):
-            """
-            格式化檢索到的文件
-            
-            Args:
-                docs: LangChain Document 物件列表
-                
-            Returns:
-                str: 格式化後的文件字串
-            """
-            formatted = []
-            for doc in docs:
-                metadata = doc.metadata
-                law_name = metadata.get('law_name', '未知法律')
-                article_no = metadata.get('article_no', '未知條文')
-                content = doc.page_content
-                formatted.append(f"【{law_name} 第{article_no}條】\n{content}")
-            return "\n\n".join(formatted)
-        
-        # 8. 建立 RAG Chain
-        chain = (
-            {"context": retriever | format_docs, "question": RunnablePassthrough()}
-            | prompt
-            | llm
-            | StrOutputParser()
-        )
-        
+
+        # 6. 建立 Chain
+        # 檢索交由 query() 以 similarity_search_with_score() 執行一次完成，
+        # chain 只負責「context + question → 回答」，避免重複檢索
+        chain = prompt | llm | StrOutputParser()
+
         print("✓ RAG 系統初始化完成\n")
-        
+
         return {
             "chain": chain,
-            "retriever": retriever,
             "vector_store": vector_store,
             "embeddings": embeddings
         }
         
-    except (OllamaConnectionError, QdrantConnectionError) as e:
-        raise e
+    except RAGError:
+        # 含 OllamaConnectionError、QdrantConnectionError，訊息已經友善，直接拋出
+        raise
     except Exception as e:
         raise RAGError(f"初始化 RAG 系統失敗: {str(e)}")
 
@@ -249,7 +246,7 @@ def query(question: str, rag_chain_dict: Dict) -> Dict:
     
     Args:
         question: 使用者問題
-        rag_chain_dict: 包含 chain 和 retriever 的字典
+        rag_chain_dict: 包含 chain 和 vector_store 的字典
         
     Returns:
         Dict: 包含以下鍵值：
@@ -269,26 +266,33 @@ def query(question: str, rag_chain_dict: Dict) -> Dict:
     
     try:
         chain = rag_chain_dict["chain"]
-        retriever = rag_chain_dict["retriever"]
-        
-        # 檢索相關文件
-        docs = retriever.invoke(question)
-        
-        # 生成回答
-        answer = chain.invoke(question)
-        
-        # 整理來源
+        vector_store = rag_chain_dict["vector_store"]
+
+        # 檢索相關文件（一次完成，同時取得相似度分數並套用門檻）
+        docs_with_scores = vector_store.similarity_search_with_score(
+            question,
+            k=config.TOP_K,
+            score_threshold=config.SCORE_THRESHOLD,
+        )
+
+        # 生成回答（將檢索結果直接作為 context，不再重複檢索）
+        docs = [doc for doc, _ in docs_with_scores]
+        context = format_docs(docs) if docs else "（未檢索到相關法條）"
+        answer = chain.invoke({"context": context, "question": question})
+
+        # 整理來源（含真實相似度分數）
         sources = []
-        for doc in docs:
+        for doc, score in docs_with_scores:
             metadata = doc.metadata
             sources.append({
                 'law_name': metadata.get('law_name', ''),
                 'article_no': metadata.get('article_no', ''),
+                'page': metadata.get('page'),
                 'content': doc.page_content,
-                'score': 0.0,
+                'score': round(float(score), 4),
                 'url': metadata.get('law_url', '')
             })
-        
+
         return {
             'answer': answer,
             'sources': sources,

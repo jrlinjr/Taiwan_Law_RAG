@@ -9,7 +9,10 @@ langchain-huggingface>=0.0.1
 langchain-qdrant>=0.1.0
 
 # 向量資料庫
-qdrant-client>=2.7.3
+qdrant-client>=1.7.3
+
+# PDF 解析
+pypdf>=4.0.0
 
 # Embedding 模型 - Mac M4 Pro 優化版本
 sentence-transformers>=2.2.0

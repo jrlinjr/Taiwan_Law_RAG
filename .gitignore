@@ -1,0 +1,16 @@
+# 環境變數（含內網位址等敏感設定）
+.env
+
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# 向量資料庫本地儲存
+qdrant_storage/
+
+# 使用者上傳的文件
+data/uploads/
+
+# macOS
+.DS_Store
