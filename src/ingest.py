@@ -14,6 +14,7 @@
 - DataIngestionError: 資料匯入錯誤基類
 - QdrantConnectionError: Qdrant 連線錯誤
 - PDFLoadError: PDF 載入錯誤
+- EmbeddingError: Embedding 計算錯誤
 """
 
 import os # 查詢檔案路徑是否存在
@@ -157,7 +158,7 @@ def create_embeddings() -> OllamaEmbeddings:
         embeddings = OllamaEmbeddings(
             model=config.EMBEDDING_MODEL,
             base_url=config.OLLAMA_BASE_URL,
-            client_kwargs={"timeout": config.OLLAMA_EMBED_TIMEOUT},
+            client_kwargs={"timeout": config.EMBED_TIMEOUT},
         )
         print(f"  ✓ 模型載入成功")
         return embeddings

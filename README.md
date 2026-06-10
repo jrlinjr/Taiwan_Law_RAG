@@ -2,31 +2,41 @@
 
 基於 RAG (Retrieval-Augmented Generation) 技術的台灣法律檢索與問答系統。
 
-使用專業法律人的三段論模式（大前提、小前提、結論），為不懂法律的民眾提供清晰易懂的法律解答。
+上傳法律 PDF（判決書、解釋函、法規等），系統會檢索相關內容，再由 LLM 生成
+「法律規範 → 法律解釋 → 白話舉例」三段式的解答，讓不懂法律的民眾也能理解。
 
 ## 功能特色
 
-- 🔍 **智能檢索**：使用向量資料庫快速檢索相關法律條文
-- 🤖 **AI 生成回答**：結合 Ollama 本地 LLM 生成準確的法律解答
-- 📚 **完整法律資料庫**：涵蓋台灣各類法律條文
-- 🌐 **友善 Web 介面**：使用 Gradio 提供直覺的問答介面
-- 🔒 **本地運行**：所有資料和運算都在本地，保護隱私
-- ⚡ **Apple Silicon 優化**：針對 Mac M4 Pro 優化，使用 MPS 加速
-- 📖 **專業法律解釋**：三段論模式 + 白話舉例，讓民眾理解法律
+- 🔍 **語意檢索**：以向量資料庫檢索與問題最相關的法律內容
+- 🤖 **AI 生成回答**：以 LLM 生成準確、易懂的法律解答
+- 📄 **PDF 匯入**：上傳 PDF 即可加入知識庫（按頁切分、保留頁碼當引用來源）
+- 🌐 **友善 Web 介面**：使用 Gradio，可在頁面上直接上傳 PDF 與提問
+- 📚 **來源可追溯**：每筆回答附上參考的法條/頁碼與相似度分數
 
 ## 系統架構
+
+運算可分散到不同服務，各司其職：
+
+```
+使用者瀏覽器
+     │
+     ▼
+  Gradio App ──┬──► Qdrant 向量資料庫（檢索）
+               ├──► Ollama（Embedding，OLLAMA_BASE_URL）
+               └──► OpenAI 相容端點（LLM 生成，LLM_BASE_URL：vLLM 或 Ollama /v1）
+```
 
 ```
 Taiwan_Law_RAG/
 ├── src/
-│   ├── config.py      # 配置管理
-│   ├── ingest.py      # 資料攝取
-│   ├── rag.py         # RAG 核心邏輯
+│   ├── config.py      # 配置管理（讀取 .env）
+│   ├── ingest.py      # PDF 匯入與 Embedding
+│   ├── rag.py         # RAG 核心：檢索 + LLM 生成
 │   └── app.py         # Gradio Web UI
-├── data/              # 法律資料
-├── docs/              # 文檔
-├── qdrant_storage/    # 向量資料庫儲存
-└── requirements.txt   # Python 依賴
+├── data/uploads/      # 上傳的 PDF 原始檔
+├── qdrant_storage/    # 向量資料庫本地儲存
+├── docker-compose.yaml
+└── requirements.txt
 ```
 
 ## 快速開始
@@ -34,127 +44,108 @@ Taiwan_Law_RAG/
 ### 1. 環境需求
 
 - Python 3.10+
-- Ollama (本地 LLM)
-- Qdrant (向量資料庫)
+- Qdrant（向量資料庫，可用 Docker 啟動）
+- 一個 Ollama 伺服器（提供 Embedding 模型）
+- 一個 OpenAI 相容的 LLM 端點（vLLM 或 Ollama 的 `/v1`）
 
 ### 2. 安裝依賴
 
 ```bash
-# 建立虛擬環境
 python -m venv venv
-source venv/bin/activate  # macOS/Linux
-# 或 venv\Scripts\activate  # Windows
-
-# 安裝套件
+source venv/bin/activate          # macOS/Linux
 pip install -r requirements.txt
 ```
 
-### 3. 啟動服務
+### 3. 設定 `.env`
+
+在專案根目錄建立 `.env`（參考下方「配置說明」）。
+
+### 4. 啟動 Qdrant
 
 ```bash
-# 啟動 Qdrant (使用 Docker)
 docker compose up -d
-
-# 確認遠端 Ollama 伺服器正在運行（LLM 不在本機跑）
-# 下載模型 (首次使用)
-ollama pull gpt-oss:20b  # 在遠端伺服器上執行
 ```
 
-### 4. 資料攝取
+### 5. 匯入資料
 
-支援 PDF 文件（判決書、解釋函、法規等，按頁切分並保留頁碼）。
-也可以直接在 Web UI 的「📥 匯入 PDF 到知識庫」上傳，原始檔會保存到 `data/uploads/`。
+支援 PDF（按頁切分、保留頁碼）。也可以直接在 Web UI 上傳，原始檔會存到 `data/uploads/`。
 
 ```bash
-# 匯入 data/uploads/ 內所有 PDF（預設）
-python src/ingest.py
-
-# 匯入單一 PDF
-python src/ingest.py data/某判決書.pdf
-
-# 匯入整個資料夾（遞迴掃描所有 .pdf）
-python src/ingest.py data/pdf/
+python src/ingest.py                    # 匯入 data/uploads/ 內所有 PDF
+python src/ingest.py data/某判決書.pdf   # 單一 PDF
+python src/ingest.py data/pdf/          # 整個資料夾（遞迴掃描 .pdf）
 ```
 
 重複匯入同一份檔案會自動清除舊資料後再寫入，不會產生重複內容。
 
-### 5. 啟動應用
+### 6. 啟動應用
 
 ```bash
-# 啟動 Web UI
 python src/app.py
 ```
 
-開啟瀏覽器訪問 `http://localhost:7860`
+開啟瀏覽器訪問 `http://localhost:7860`。
 
 ## 配置說明
 
-在專案根目錄建立 `.env` 檔案：
+`.env` 範例：
 
 ```env
-# Qdrant 配置
+# Qdrant 向量資料庫
 QDRANT_HOST=localhost
 QDRANT_PORT=6333
 QDRANT_COLLECTION=taiwan_law
 
-# Embedding 模型 (由遠端 Ollama 伺服器計算)
+# Embedding 服務（Ollama）
+OLLAMA_BASE_URL=http://localhost:11434
 EMBEDDING_MODEL=imac/zpoint_large_embedding_zh
 
-# Ollama 配置 (遠端伺服器)
-OLLAMA_BASE_URL=http://10.0.0.209:11434
-OLLAMA_MODEL=gemma4:12b
+# LLM 服務（OpenAI 相容端點：vLLM 或 Ollama 的 /v1）
+LLM_BASE_URL=http://localhost:11434/v1
+LLM_MODEL=gemma-4-26b
+
+# 遠端服務逾時（秒）
+LLM_TIMEOUT=300
+EMBED_TIMEOUT=120
 
 # RAG 參數
-TOP_K=10
+TOP_K=8
 SCORE_THRESHOLD=0.5
 
-# Gradio 配置
+# Gradio
 GRADIO_SERVER_NAME=0.0.0.0
 GRADIO_SERVER_PORT=7860
 GRADIO_SHARE=False
 ```
 
-### 配置說明
+| 設定 | 說明 |
+|------|------|
+| `OLLAMA_BASE_URL` / `EMBEDDING_MODEL` | Embedding 服務位址與模型（Ollama） |
+| `LLM_BASE_URL` / `LLM_MODEL` | LLM 服務位址與模型；OpenAI 相容，vLLM 或 Ollama `/v1` 皆可 |
+| `TOP_K` | 每次檢索取前 K 個片段（越大回答越完整，但 LLM 生成越慢） |
+| `SCORE_THRESHOLD` | 相似度門檻，低於此值的片段不納入 context |
 
-- **EMBEDDING_MODEL**: 使用 `imac/zpoint_large_embedding_zh`（中文專用,1024 維,由遠端 Ollama 計算）
-- **OLLAMA_BASE_URL**: 遠端 Ollama 伺服器地址 (10.0.0.209)
-- **OLLAMA_MODEL**: 使用 `gemma4:12b` 生成法律解答
-- **TOP_K**: 每次檢索取前 K 個最相關的頁面（越大回答越完整,但 LLM 生成越慢）
+> Embedding 與 LLM 可指向不同主機。例如：LLM 用一台有 GPU 的機器跑 vLLM，
+> Embedding 指向另一台有 Ollama 的機器，兩者各自獨立設定即可。
 
 ## 使用範例
-
-### Web 介面（推薦）
-
-```bash
-# 啟動應用
-python src/app.py
-
-# 在瀏覽器中訪問
-# http://localhost:7860
-```
 
 ### 命令列查詢
 
 ```python
-from src.rag import create_rag_chain, query
+import sys; sys.path.insert(0, "src")
+from rag import create_rag_chain, query
 
-# 建立 RAG 系統
 rag_chain_dict = create_rag_chain()
-
-# 執行查詢
 result = query("什麼是詐欺罪？", rag_chain_dict)
 
-# 顯示結果
-print("回答:")
-print(result['answer'])
-print("\n來源法條:")
-for source in result['sources']:
-    print(f"- {source['law_name']} 第{source['article_no']}條")
+print(result["answer"])
+for s in result["sources"]:
+    label = s["article_no"] or f"第{s['page']}頁"
+    print(f"- {s['law_name']} {label}（相似度 {s['score']}）")
 ```
 
 ### 回答格式
-
-系統使用三段論模式回答：
 
 ```
 依據刑法第 339 條之規定，行為人之詐欺行為成立詐欺罪。
@@ -172,41 +163,29 @@ for source in result['sources']:
 
 ## 技術棧
 
-- **LangChain**: RAG 框架
-- **Ollama**: 遠端 LLM 服務 (gpt-oss:20b @ 10.0.0.209)
-- **Qdrant**: 向量資料庫 (本地)
-- **HuggingFace**: Embedding 模型 (BAAI/bge-m3)
-- **Gradio**: Web UI 框架
+- **LangChain**：RAG 框架
+- **Qdrant**：向量資料庫
+- **Ollama**：Embedding 服務（`imac/zpoint_large_embedding_zh`）
+- **vLLM / Ollama**：LLM 生成（OpenAI 相容端點）
+- **pypdf**：PDF 文字抽取
+- **Gradio**：Web UI
 
 ## 常見問題
 
-### Q: 如何更改 LLM 模型？
+### Q: 如何更換 LLM 模型？
 
-編輯 `.env` 檔案（需在遠端伺服器上下載模型）：
-```env
-OLLAMA_MODEL=qwen2.5:14b
-```
+編輯 `.env` 的 `LLM_MODEL`（並確認該模型存在於 `LLM_BASE_URL` 的服務上）。
 
-### Q: 如何提升回答品質？
+### Q: 如何提升回答品質 / 加快速度？
 
-1. 增加檢索數量：`TOP_K=15`
-2. 使用更大的 Embedding 模型：`BAAI/bge-large-zh-v1.5`
-3. 確保遠端 Ollama 伺服器正常運行
+- 提升完整度：調高 `TOP_K`
+- 加快速度：調低 `TOP_K`、或提高 `SCORE_THRESHOLD`
+- 更換更適合的 LLM 或 Embedding 模型
 
-### Q: 如何加快查詢速度？
+### Q: 掃描影像 PDF 匯入失敗？
 
-1. 減少檢索數量：`TOP_K=5`
-2. 提高相似度門檻：`SCORE_THRESHOLD=0.7`
-3. 檢查網路連線到遠端 Ollama 伺服器
+沒有文字層的掃描 PDF 需要 OCR 才能抽取文字，本系統暫不支援。
 
 ## 授權
 
 MIT License
-
-## 貢獻
-
-歡迎提交 Issue 和 Pull Request！
-
----
-
-**最後更新**: 2025 年 12 月

@@ -16,21 +16,17 @@ class Config:
     QDRANT_PORT = int(os.getenv("QDRANT_PORT", "6333"))
     QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "taiwan_law")
     
-    # Embedding 模型（由 OLLAMA_BASE_URL 的伺服器計算）
-    EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "imac/zpoint_large_embedding_zh")
-    
-    # Ollama 配置（embedding 用；實際伺服器位址請在 .env 設定，勿寫死於程式碼）
+    # Embedding 服務（Ollama，由 OLLAMA_BASE_URL 的伺服器計算）
     OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-    OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gpt-oss:20b")
+    EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "imac/zpoint_large_embedding_zh")
 
-    # LLM 服務（OpenAI 相容端點：vLLM 或 Ollama 的 /v1 都可）
-    # 預設沿用 Ollama；要改用 vLLM 時在 .env 設定這兩項即可
+    # LLM 服務（OpenAI 相容端點：vLLM 或 Ollama 的 /v1 皆可）
     LLM_BASE_URL = os.getenv("LLM_BASE_URL", f"{OLLAMA_BASE_URL}/v1")
-    LLM_MODEL = os.getenv("LLM_MODEL", OLLAMA_MODEL)
+    LLM_MODEL = os.getenv("LLM_MODEL", "gemma-4-26b")
 
-    # 遠端呼叫逾時（秒）：伺服器卡住時不要讓查詢無限等待
-    OLLAMA_LLM_TIMEOUT = int(os.getenv("OLLAMA_LLM_TIMEOUT", "300"))
-    OLLAMA_EMBED_TIMEOUT = int(os.getenv("OLLAMA_EMBED_TIMEOUT", "120"))
+    # 遠端服務逾時（秒）：伺服器卡住時不要讓查詢無限等待
+    LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "300"))
+    EMBED_TIMEOUT = int(os.getenv("EMBED_TIMEOUT", "120"))
     
     # RAG 配置
     TOP_K = int(os.getenv("TOP_K", "10"))

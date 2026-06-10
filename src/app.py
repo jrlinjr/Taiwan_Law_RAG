@@ -273,8 +273,8 @@ def main():
     print("=" * 60)
     print("中華民國法律智能問答系統 - Web UI")
     print("=" * 60)
-    print(f"\nOllama 模型: {config.OLLAMA_MODEL}")
-    print(f"Embedding 模型: {config.EMBEDDING_MODEL}")
+    print(f"\nLLM 模型: {config.LLM_MODEL} @ {config.LLM_BASE_URL}")
+    print(f"Embedding 模型: {config.EMBEDDING_MODEL} @ {config.OLLAMA_BASE_URL}")
     print(f"Qdrant Collection: {config.QDRANT_COLLECTION}")
     
     try:

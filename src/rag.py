@@ -3,14 +3,18 @@ RAG (Retrieval-Augmented Generation) 模組
 負責檢索相關法律條文並生成回答
 
 主要功能：
-- check_ollama_connection(): 檢查 Ollama 連接
-- check_qdrant_connection(): 檢查 Qdrant 連接
-- create_rag_chain(): 建立 RAG 查詢鏈
-- query(): 執行查詢
+- create_rag_chain(): 建立 RAG 系統（檢索器 + LLM）
+- query(): 執行查詢（檢索相關條文 → 生成回答 → 整理來源）
+
+服務分工：
+- 檢索：Qdrant 向量資料庫
+- Embedding：Ollama（OLLAMA_BASE_URL）
+- LLM 生成：OpenAI 相容端點（LLM_BASE_URL，vLLM 或 Ollama /v1）
 
 錯誤處理：
 - RAGError: RAG 相關錯誤基類
-- OllamaConnectionError: Ollama 連線錯誤
+- OllamaConnectionError: Embedding（Ollama）連線錯誤
+- LLMConnectionError: LLM 服務連線錯誤
 - QdrantConnectionError: Qdrant 連線錯誤
 """
 
@@ -33,7 +37,12 @@ class RAGError(Exception):
 
 
 class OllamaConnectionError(RAGError):
-    """Ollama 連線錯誤"""
+    """Embedding（Ollama）連線錯誤"""
+    pass
+
+
+class LLMConnectionError(RAGError):
+    """LLM 服務連線錯誤"""
     pass
 
 
@@ -44,8 +53,8 @@ class QdrantConnectionError(RAGError):
 
 def check_ollama_connection() -> bool:
     """
-    檢查 Ollama 服務是否可連接
-    
+    檢查 Embedding 用的 Ollama 服務是否可連接
+
     Returns:
         bool: 連接成功返回 True，否則返回 False
     """
@@ -61,7 +70,7 @@ def get_available_models() -> List[str]:
     取得 Ollama 伺服器上可用的模型名稱清單（embedding 用）
 
     Returns:
-        List[str]: 模型名稱列表（含 tag，如 "gemma4:12b"）；查詢失敗時回傳空列表
+        List[str]: 模型名稱列表（含 tag，如 "zpoint:latest"）；查詢失敗時回傳空列表
     """
     try:
         response = requests.get(f"{config.OLLAMA_BASE_URL}/api/tags", timeout=5)
@@ -151,7 +160,8 @@ def create_rag_chain() -> Dict:
             - embeddings: Embedding 模型
 
     Raises:
-        OllamaConnectionError: 無法連接 Ollama
+        OllamaConnectionError: 無法連接 Embedding（Ollama）服務
+        LLMConnectionError: 無法連接 LLM 服務
         QdrantConnectionError: 無法連接 Qdrant
         RAGError: 其他初始化錯誤
     """
@@ -189,13 +199,13 @@ def create_rag_chain() -> Dict:
         # LLM 模型：查 OpenAI 相容端點的 /models（vLLM 或 Ollama 皆支援）
         llm_models = get_llm_models()
         if not llm_models:
-            raise OllamaConnectionError(
+            raise LLMConnectionError(
                 f"無法連接 LLM 服務（{config.LLM_BASE_URL}）\n"
                 f"請確認服務是否正在運行"
             )
         if (config.LLM_MODEL not in llm_models
                 and f"{config.LLM_MODEL}:latest" not in llm_models):
-            raise OllamaConnectionError(
+            raise LLMConnectionError(
                 f"LLM 服務（{config.LLM_BASE_URL}）上找不到模型：{config.LLM_MODEL}\n"
                 f"現有模型：{', '.join(llm_models[:5])}"
             )
@@ -230,7 +240,7 @@ def create_rag_chain() -> Dict:
             api_key="not-needed",  # vLLM / Ollama 不驗證金鑰,但欄位必填
             model=config.LLM_MODEL,
             temperature=0.2,
-            timeout=config.OLLAMA_LLM_TIMEOUT,
+            timeout=config.LLM_TIMEOUT,
             max_retries=1,
         )
         print("✓ LLM 初始化成功")
